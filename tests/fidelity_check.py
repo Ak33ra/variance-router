@@ -41,67 +41,72 @@ from replay_client import _pct, load_trace, make_trace, replay  # noqa: E402
 METRICS = ("ttft_ms", "tpot_ms", "e2e_ms")
 
 
-async def _warmup(url: str, trace: list[dict], k: int = 5) -> None:
-    """Fire a few zero-delay requests so vLLM's first-call compile/alloc cost
-    doesn't land on the measured run."""
+async def _warmup(url: str, trace: list[dict], k: int = 10) -> None:
+    """Fire a batch of zero-delay requests so vLLM's first-call cost (CUDA-graph
+    capture, torch.compile/autotuning, allocator + clock spin-up) is paid before
+    the measured run. Cold-start otherwise lands entirely on whichever path runs
+    first and masquerades as a router effect."""
+    if k <= 0:
+        return
     warm = []
-    for item in trace[:k]:
-        w = dict(item)
+    # Cycle the trace if it's shorter than k so warmup count is honored.
+    for i in range(k):
+        w = dict(trace[i % len(trace)])
         w["arrival_s"] = 0.0
         warm.append(w)
-    if warm:
-        await replay(url, warm)
+    await replay(url, warm)
 
 
 def _ok_count(results: list[dict]) -> int:
     return sum(1 for r in results if r.get("ok"))
 
 
-def _print_table(direct: list[dict], router: list[dict]) -> bool:
-    d_ok = [r for r in direct if r.get("ok")]
-    r_ok = [r for r in router if r.get("ok")]
-    print(f"\nsuccessful requests   direct={len(d_ok)}/{len(direct)}   router={len(r_ok)}/{len(router)}")
-    if not d_ok or not r_ok:
-        print("  !! one side had no successful requests; cannot compare")
+def _series(runs: list[dict], m: str, p: float) -> float:
+    return _pct([x[m] for x in runs if x.get("ok")], p)
+
+
+def _compare(d1: list[dict], r: list[dict], d2: list[dict]) -> bool:
+    """A/B/A comparison: direct#1, router, direct#2.
+
+    The two direct runs bracket run-to-run drift (warmup residue, clock/thermal
+    movement) — the noise floor. The router hop can only ADD latency, so the
+    verdict checks that the router doesn't exceed the SLOWER direct run by more
+    than that noise floor (plus a small budget). Router faster than direct just
+    means residual drift, not a real speedup.
+    """
+    sets = (("direct#1", d1), ("router", r), ("direct#2", d2))
+    print()
+    for name, v in sets:
+        print(f"  {name:9s} ok={sum(1 for x in v if x.get('ok'))}/{len(v)}")
+    if any(not any(x.get("ok") for x in v) for _, v in sets):
+        print("  !! a run had no successful requests; cannot compare")
         return False
 
-    print(f"\n{'metric':9s} {'pctl':5s} {'direct':>10s} {'router':>10s} {'delta':>10s} {'delta%':>8s}")
-    print("-" * 56)
-    verdict_ok = True
+    print(f"\n{'metric':9s} {'pctl':5s} {'direct#1':>10s} {'router':>10s} {'direct#2':>10s} {'drift':>9s}")
+    print("-" * 60)
     for m in METRICS:
-        d_vals = [r[m] for r in d_ok]
-        r_vals = [r[m] for r in r_ok]
         for p in (50, 95, 99):
-            d = _pct(d_vals, p)
-            r = _pct(r_vals, p)
-            delta = r - d
-            pct = (delta / d * 100.0) if d and d == d and d != 0 else float("nan")
-            print(f"{m:9s} P{p:<4d} {d:10.2f} {r:10.2f} {delta:10.2f} {pct:7.1f}%")
-        print("-" * 56)
+            a, b, c = _series(d1, m, p), _series(r, m, p), _series(d2, m, p)
+            print(f"{m:9s} P{p:<4d} {a:10.2f} {b:10.2f} {c:10.2f} {c - a:9.2f}")
+        print("-" * 60)
+    print("  drift = direct#2 - direct#1 (run-to-run noise floor: warmup/clocks/thermals).")
+    print("  router faster than direct => residual drift, not a real speedup.\n")
 
-    # Heuristic gates on P50 (median is the stable signal under GPU noise).
-    d_ttft = _pct([r["ttft_ms"] for r in d_ok], 50)
-    r_ttft = _pct([r["ttft_ms"] for r in r_ok], 50)
-    d_tpot = _pct([r["tpot_ms"] for r in d_ok], 50)
-    r_tpot = _pct([r["tpot_ms"] for r in r_ok], 50)
-
-    ttft_budget = max(8.0, 0.15 * d_ttft)
-    if (r_ttft - d_ttft) > ttft_budget:
-        verdict_ok = False
-        print(f"  [FAIL] router TTFT P50 +{r_ttft - d_ttft:.2f}ms over direct "
-              f"(budget {ttft_budget:.2f}ms) — router adding latency / buffering?")
-    else:
-        print(f"  [PASS] router TTFT P50 within budget (+{r_ttft - d_ttft:.2f}ms <= {ttft_budget:.2f}ms)")
-
-    tpot_budget = max(2.0, 0.15 * d_tpot)
-    if abs(r_tpot - d_tpot) > tpot_budget:
-        verdict_ok = False
-        print(f"  [FAIL] router TPOT P50 differs by {r_tpot - d_tpot:+.2f}ms "
-              f"(budget ±{tpot_budget:.2f}ms) — per-token cadence should be untouched")
-    else:
-        print(f"  [PASS] router TPOT P50 within ±{tpot_budget:.2f}ms ({r_tpot - d_tpot:+.2f}ms)")
-
-    return verdict_ok
+    ok = True
+    for m, label, floor in (("ttft_ms", "TTFT", 8.0), ("tpot_ms", "TPOT", 2.0)):
+        a, b, c = _series(d1, m, 50), _series(r, m, 50), _series(d2, m, 50)
+        fast, slow = min(a, c), max(a, c)
+        budget = max(floor, 0.15 * fast)
+        excess = b - slow  # how much SLOWER the router is than the slower direct run
+        if excess > budget:
+            ok = False
+            print(f"  [FAIL] router {label} P50 {b:.2f}ms over direct band "
+                  f"[{fast:.2f},{slow:.2f}] by +{excess:.2f}ms > budget {budget:.2f}ms")
+        else:
+            where = "below" if b < fast else "inside"
+            print(f"  [PASS] router {label} P50 {b:.2f}ms {where} direct band "
+                  f"[{fast:.2f},{slow:.2f}] (drift {slow - fast:.2f}ms) — no router cost detectable")
+    return ok
 
 
 def _check_router_log(path: str, expected: int) -> bool:
@@ -135,15 +140,19 @@ async def _amain(args) -> int:
         return 2
 
     trace = load_trace(args.trace)
-    print(f"replaying {len(trace)} requests; warming up...")
-    await _warmup(args.direct, trace)
+    print(f"replaying {len(trace)} requests; warming BOTH paths (warmup={args.warmup})...")
+    await _warmup(args.direct, trace, args.warmup)
+    await _warmup(args.router, trace, args.warmup)
 
-    print(f"A: direct  -> {args.direct}")
-    direct = await replay(args.direct, trace)
-    print(f"B: router  -> {args.router}")
+    # A/B/A so run-to-run drift is observable and the router is judged against it.
+    print(f"D1: direct -> {args.direct}")
+    d1 = await replay(args.direct, trace)
+    print(f"R : router -> {args.router}")
     router = await replay(args.router, trace)
+    print(f"D2: direct -> {args.direct}  (drift control)")
+    d2 = await replay(args.direct, trace)
 
-    ok = _print_table(direct, router)
+    ok = _compare(d1, router, d2)
     if args.router_log:
         ok = _check_router_log(args.router_log, len(trace)) and ok
 
@@ -158,6 +167,8 @@ def main() -> int:
     ap.add_argument("--trace", help="Trace JSONL to replay (same file used for both sides).")
     ap.add_argument("--router-log", help="Router JSONL log to check overhead / TTFT capture.")
     ap.add_argument("--make-trace", action="store_true", help="Generate a bursty trace first.")
+    ap.add_argument("--warmup", type=int, default=10,
+                    help="Warmup requests fired at BOTH paths before measuring (absorbs cold-start).")
     ap.add_argument("--n", type=int, default=60)
     ap.add_argument("--rate", type=float, default=20.0)
     ap.add_argument("--burst-cv", type=float, default=2.0)
