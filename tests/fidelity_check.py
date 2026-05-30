@@ -128,7 +128,7 @@ def _check_router_log(path: str, expected: int) -> bool:
 async def _amain(args) -> int:
     if args.make_trace:
         path = args.trace or os.path.join(tempfile.gettempdir(), "fidelity_trace.jsonl")
-        make_trace(path, args.n, args.rate, args.burst_cv, args.max_tokens, args.chat)
+        make_trace(path, args.n, args.rate, args.burst_cv, args.max_tokens, args.chat, args.model)
         args.trace = path
     if not args.trace:
         print("provide --trace or --make-trace", file=sys.stderr)
@@ -163,6 +163,8 @@ def main() -> int:
     ap.add_argument("--burst-cv", type=float, default=2.0)
     ap.add_argument("--max-tokens", type=int, default=64)
     ap.add_argument("--chat", action="store_true")
+    ap.add_argument("--model", default="mock-model",
+                    help="model field in generated requests; MUST match the served vLLM model id.")
     return asyncio.run(_amain(ap.parse_args()))
 
 

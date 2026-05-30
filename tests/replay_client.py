@@ -161,7 +161,8 @@ def load_trace(path: str) -> list[dict]:
     return [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
 
 
-def make_trace(path: str, n: int, rate: float, burst_cv: float, max_tokens: int, chat: bool) -> None:
+def make_trace(path: str, n: int, rate: float, burst_cv: float, max_tokens: int, chat: bool,
+               model: str = "mock-model") -> None:
     """Generate a simple bursty trace deterministically (no RNG seed reliance).
 
     Inter-arrival gaps alternate between short (bursty) and long (quiet) to give
@@ -179,10 +180,10 @@ def make_trace(path: str, n: int, rate: float, burst_cv: float, max_tokens: int,
         gap = long if (i % 6 == 5) else short
         t += gap
         if chat:
-            body = {"model": "mock-model", "stream": True, "max_tokens": max_tokens,
+            body = {"model": model, "stream": True, "max_tokens": max_tokens,
                     "messages": [{"role": "user", "content": f"req {i} " + "x " * 10}]}
         else:
-            body = {"model": "mock-model", "stream": True, "max_tokens": max_tokens,
+            body = {"model": model, "stream": True, "max_tokens": max_tokens,
                     "prompt": f"req {i} " + "x " * 10}
         lines.append(json.dumps({"arrival_s": round(t, 6), "endpoint": endpoint, "body": body}))
     Path(path).write_text("\n".join(lines) + "\n")
@@ -199,10 +200,12 @@ def main():
     ap.add_argument("--burst-cv", type=float, default=2.0)
     ap.add_argument("--max-tokens", type=int, default=32)
     ap.add_argument("--chat", action="store_true")
+    ap.add_argument("--model", default="mock-model",
+                    help="model field written into the trace; MUST match the served vLLM model.")
     args = ap.parse_args()
 
     if args.make_trace:
-        make_trace(args.make_trace, args.n, args.rate, args.burst_cv, args.max_tokens, args.chat)
+        make_trace(args.make_trace, args.n, args.rate, args.burst_cv, args.max_tokens, args.chat, args.model)
         return
 
     if not args.trace:
