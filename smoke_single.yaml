@@ -1,0 +1,6 @@
+backends:
+  - {host: 127.0.0.1, port: 8001, gpu_id: 0}
+policy: {name: round_robin, params: {}}   # N=1: policy is irrelevant for fidelity
+log_path: logs/router_log.jsonl
+host: 127.0.0.1
+port: 8000
