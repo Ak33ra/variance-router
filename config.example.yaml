@@ -1,0 +1,41 @@
+# Example router config. Copy and edit per experiment.
+#
+# One independent `vllm serve` instance per GPU, each on its own port.
+# Do NOT use vLLM data-parallel mode (see README "Topology").
+
+backends:
+  - { host: 127.0.0.1, port: 8001, gpu_id: 0 }
+  - { host: 127.0.0.1, port: 8002, gpu_id: 1 }
+  - { host: 127.0.0.1, port: 8003, gpu_id: 2 }
+  - { host: 127.0.0.1, port: 8004, gpu_id: 3 }
+
+# Active routing policy. Swap `name` to compare policies on the SAME trace.
+#
+#   round_robin   (baseline)  no params
+#   jsq           (baseline)  no params
+#   burst         (intervention)
+#       burst_size: 16            # primary knob: requests per clump
+#       active_window_ms: null    # optional time-based rotation (or instead of burst_size)
+#       num_active_nodes: 1       # how many adjacent nodes are active at once
+#       within_active: round_robin  # or jsq, used when num_active_nodes > 1
+#   regime_aware  (stretch)
+#       low_watermark: 4
+#       high_watermark: 32
+policy:
+  name: jsq
+  params: {}
+
+# Per-request JSONL log. Each record is joinable to backend logs on request_id.
+log_path: logs/router_log.jsonl
+
+host: 0.0.0.0
+port: 8000
+
+timeouts:
+  connect_s: 5.0
+  read_s: null        # no read timeout: token generations can be long
+  write_s: 10.0
+  pool_s: 5.0
+  health_check_s: 5.0
+
+health_check_on_startup: true
