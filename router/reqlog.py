@@ -20,8 +20,9 @@ from typing import Any
 class RequestLogger:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
-        if self.path.parent and not self.path.parent.exists():
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Auto-create the log directory so configs can point at logs/ etc.
+        # without the dir needing to exist beforehand.
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         # buffering=1 -> line-buffered text mode (flush on every newline).
         self._fh = self.path.open("a", buffering=1, encoding="utf-8")
         self._lock = threading.Lock()

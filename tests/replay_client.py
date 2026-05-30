@@ -186,7 +186,9 @@ def make_trace(path: str, n: int, rate: float, burst_cv: float, max_tokens: int,
             body = {"model": model, "stream": True, "max_tokens": max_tokens,
                     "prompt": f"req {i} " + "x " * 10}
         lines.append(json.dumps({"arrival_s": round(t, 6), "endpoint": endpoint, "body": body}))
-    Path(path).write_text("\n".join(lines) + "\n")
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)  # auto-create output dir
+    out.write_text("\n".join(lines) + "\n")
     print(f"wrote {n} requests to {path}")
 
 
