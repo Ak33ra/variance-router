@@ -41,20 +41,19 @@ from replay_client import _pct, load_trace, make_trace, replay  # noqa: E402
 METRICS = ("ttft_ms", "tpot_ms", "e2e_ms")
 
 
-async def _warmup(url: str, trace: list[dict], k: int = 10) -> None:
-    """Fire a batch of zero-delay requests so vLLM's first-call cost (CUDA-graph
-    capture, torch.compile/autotuning, allocator + clock spin-up) is paid before
-    the measured run. Cold-start otherwise lands entirely on whichever path runs
-    first and masquerades as a router effect."""
-    if k <= 0:
-        return
-    warm = []
-    # Cycle the trace if it's shorter than k so warmup count is honored.
-    for i in range(k):
-        w = dict(trace[i % len(trace)])
-        w["arrival_s"] = 0.0
-        warm.append(w)
-    await replay(url, warm)
+async def _warmup(url: str, trace: list[dict], rounds: int = 1) -> None:
+    """Warm a path by replaying the FULL trace (its real arrival pattern)
+    ``rounds`` times before measuring.
+
+    vLLM's first-call cost — CUDA-graph capture, torch.compile/autotuning,
+    allocator + clock spin-up — is paid the first time each *batch size* is seen.
+    A burst of concurrent requests only captures one big batch size, leaving the
+    bursty measured trace to hit fresh batch sizes mid-run; that residual
+    cold-start lands on whichever measured run goes first and masquerades as a
+    router effect. Replaying the actual pattern captures the same batch sizes the
+    measured run will hit, so all measured runs start fully warm."""
+    for _ in range(max(0, rounds)):
+        await replay(url, trace)
 
 
 def _ok_count(results: list[dict]) -> int:
@@ -140,9 +139,9 @@ async def _amain(args) -> int:
         return 2
 
     trace = load_trace(args.trace)
-    print(f"replaying {len(trace)} requests; warming BOTH paths (warmup={args.warmup})...")
-    await _warmup(args.direct, trace, args.warmup)
-    await _warmup(args.router, trace, args.warmup)
+    print(f"replaying {len(trace)} requests; warming BOTH paths ({args.warmup_rounds} full-trace round(s))...")
+    await _warmup(args.direct, trace, args.warmup_rounds)
+    await _warmup(args.router, trace, args.warmup_rounds)
 
     # A/B/A so run-to-run drift is observable and the router is judged against it.
     print(f"D1: direct -> {args.direct}")
@@ -167,8 +166,9 @@ def main() -> int:
     ap.add_argument("--trace", help="Trace JSONL to replay (same file used for both sides).")
     ap.add_argument("--router-log", help="Router JSONL log to check overhead / TTFT capture.")
     ap.add_argument("--make-trace", action="store_true", help="Generate a bursty trace first.")
-    ap.add_argument("--warmup", type=int, default=10,
-                    help="Warmup requests fired at BOTH paths before measuring (absorbs cold-start).")
+    ap.add_argument("--warmup-rounds", type=int, default=1,
+                    help="Full-trace warmup replays fired at BOTH paths before measuring "
+                         "(captures CUDA graphs for the batch sizes the run will hit).")
     ap.add_argument("--n", type=int, default=60)
     ap.add_argument("--rate", type=float, default=20.0)
     ap.add_argument("--burst-cv", type=float, default=2.0)
