@@ -18,6 +18,11 @@ backends:
 #       active_window_ms: null    # optional time-based rotation (or instead of burst_size)
 #       num_active_nodes: 1       # how many adjacent nodes are active at once
 #       within_active: round_robin  # or jsq, used when num_active_nodes > 1
+#   burst_wrap    (intervention)  concentration on top of a load-aware base policy
+#       base: jsq                 # base policy that picks WHERE each clump goes
+#       base_params: {}           # params forwarded to the base policy
+#       burst_size: 16            # requests pinned per target (null -> time-only)
+#       active_window_ms: null    # optional time-based re-pick (or instead of burst_size)
 #   regime_aware  (stretch)
 #       low_watermark: 4
 #       high_watermark: 32

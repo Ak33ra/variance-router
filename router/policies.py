@@ -186,6 +186,83 @@ class BurstPolicy(RoutingPolicy):
         return chosen
 
 
+class BurstWrapperPolicy(RoutingPolicy):
+    """Concentration as a decorator over any base policy.
+
+    Separates *where* a clump goes (delegated to a load-aware base policy such as
+    jsq) from the *bursting* itself: pick a target via the base policy, pin the
+    next burst to it, then re-pick. Unlike ``burst`` (which rotates the active
+    node by fixed position, load-agnostic), the target here adapts to live load,
+    and quiet periods emerge — after a burst lands on the base-chosen node its
+    in-flight leads, so the next re-pick moves the clump and the prior node drains.
+
+    Re-pick triggers (whichever fires first, same semantics as ``burst``):
+      burst_size (int, default 16):   requests pinned to the target before re-pick.
+                                      Set null to re-pick on time only.
+      active_window_ms (float, opt):  max wall time on one target before re-pick,
+                                      evaluated at request arrival (no timer).
+
+    Composition:
+      base (str, required):           name of the base policy (round_robin, jsq,
+                                      regime_aware — not another wrapper).
+      base_params (dict, default {}): params forwarded to the base policy.
+
+    Note: concentration is not guaranteed the way fixed rotation guarantees it —
+    if burst_size is small relative to the drain rate the base policy may re-pick
+    the same node. Verify induced per-node CV actually rises (tests/inspect_log.py).
+    """
+
+    name = "burst_wrap"
+
+    def __init__(self, pool: BackendPool, params: dict[str, Any]) -> None:
+        super().__init__(pool, params)
+        base_name = params.get("base")
+        if not base_name:
+            raise ValueError("burst_wrap requires a 'base' policy name")
+        if base_name == self.name:
+            raise ValueError("burst_wrap cannot wrap another burst_wrap")
+        self.base = build_policy(pool, base_name, params.get("base_params", {}))
+
+        bs = params.get("burst_size", 16)
+        self.burst_size = None if bs is None else int(bs)
+        aw = params.get("active_window_ms", None)
+        self.active_window_ms = None if aw is None else float(aw)
+        if self.burst_size is None and self.active_window_ms is None:
+            raise ValueError("burst_wrap needs at least one of burst_size or active_window_ms")
+
+        self._target: BackendState | None = None
+        self._count = 0  # requests pinned to the current target
+        # Lazily seeded from the first request's arrival time (clock-source-safe).
+        self._window_start: float | None = None
+
+    def effective_params(self) -> dict[str, Any]:
+        return {
+            "base": self.base.describe(),
+            "burst_size": self.burst_size,
+            "active_window_ms": self.active_window_ms,
+        }
+
+    def _should_repick(self, now: float) -> bool:
+        by_count = self.burst_size is not None and self._count >= self.burst_size
+        by_time = (
+            self.active_window_ms is not None
+            and self._window_start is not None
+            and (now - self._window_start) * 1000.0 >= self.active_window_ms
+        )
+        return by_count or by_time
+
+    def route(self, request: RequestInfo) -> BackendState:
+        now = request.arrival_monotonic
+        if self._window_start is None:
+            self._window_start = now
+        if self._target is None or self._should_repick(now):
+            self._target = self.base.route(request)  # base reads live in-flight
+            self._count = 0
+            self._window_start = now
+        self._count += 1
+        return self._target
+
+
 class RegimeAwarePolicy(RoutingPolicy):
     """Stretch / second intervention: route to keep each node either draining
     (in-flight below ``low_watermark`` -> cheap memory-bound decode) or filled
@@ -231,7 +308,7 @@ class RegimeAwarePolicy(RoutingPolicy):
 
 POLICIES: dict[str, type[RoutingPolicy]] = {
     cls.name: cls
-    for cls in (RoundRobinPolicy, JSQPolicy, BurstPolicy, RegimeAwarePolicy)
+    for cls in (RoundRobinPolicy, JSQPolicy, BurstPolicy, BurstWrapperPolicy, RegimeAwarePolicy)
 }
 
 

@@ -75,6 +75,46 @@ def test_burst_multi_active():
     assert seq == [0, 1, 0, 1, 2, 3, 2, 3], seq
 
 
+def test_burst_wrap_count_based_over_round_robin():
+    # Base round_robin advances once per re-pick; each target is pinned burst_size.
+    pool = _pool(3)
+    p = build_policy(pool, "burst_wrap", {"base": "round_robin", "burst_size": 3})
+    seq = [p.route(_req()).index for _ in range(9)]
+    assert seq == [0, 0, 0, 1, 1, 1, 2, 2, 2], seq
+
+
+def test_burst_wrap_jsq_repicks_on_live_load():
+    # The re-pick must consult live in-flight. Simulate the proxy's acquire() by
+    # bumping in_flight as requests are dispatched.
+    pool = _pool(2)
+    p = build_policy(pool, "burst_wrap", {"base": "jsq", "burst_size": 2})
+    a = p.route(_req()); pool[a.index].in_flight += 1          # both 0 -> idx0
+    b = p.route(_req()); pool[b.index].in_flight += 1          # still bursting -> idx0
+    assert a.index == 0 and b.index == 0
+    c = p.route(_req())                                        # re-pick: idx0=2, idx1=0
+    assert c.index == 1, c.index
+
+
+def test_burst_wrap_time_based():
+    pool = _pool(2)
+    p = build_policy(pool, "burst_wrap", {"base": "round_robin",
+                                          "burst_size": None, "active_window_ms": 100})
+    assert p.route(_req(0.00)).index == 0
+    assert p.route(_req(0.05)).index == 0
+    assert p.route(_req(0.15)).index == 1   # window elapsed -> re-pick
+    assert p.route(_req(0.18)).index == 1
+
+
+def test_burst_wrap_validation():
+    for params in ({}, {"base": "jsq", "burst_size": None, "active_window_ms": None},
+                   {"base": "burst_wrap", "burst_size": 4}):
+        try:
+            build_policy(_pool(), "burst_wrap", params)
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for {params}")
+
+
 def test_regime_aware_fills_band_then_drains():
     pool = _pool(3)
     p = build_policy(pool, "regime_aware", {"low_watermark": 2, "high_watermark": 5})
