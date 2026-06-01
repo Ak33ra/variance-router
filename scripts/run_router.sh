@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BACKEND_HOST=127.0.0.1
-BACKEND_PORTS="8001"   # space-separated; one backend per port
+BACKEND_PORTS="8001 8002"   # space-separated; one backend per port
 ROUTER_PORT=8000
 POLICY=round_robin
 POLICY_PARAMS="{}"
