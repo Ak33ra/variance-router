@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MODEL=Qwen/Qwen3.5-9B
-GPUS=(0 1 2 3)        # one vLLM instance per listed GPU id
+GPUS=(0 1)        # one vLLM instance per listed GPU id
 BASE_PORT=8001        # instance i serves on BASE_PORT + i
 GPU_MEM_UTIL=0.90     # each instance owns its GPU, so use most of it
 MAX_MODEL_LEN=2048
@@ -21,9 +21,9 @@ CONFIG=cluster.yaml
 BACKEND_HOST=127.0.0.1
 ROUTER_HOST=127.0.0.1
 ROUTER_PORT=8000
-POLICY=jsq            # baseline; set to burst / regime_aware for the interventions
-POLICY_PARAMS="{}"    # e.g. {burst_size: 8} for burst
-LOG_PATH=logs/router_log.jsonl
+POLICY=burst_wrap            # baseline; set to burst / regime_aware for the interventions
+POLICY_PARAMS="{base: round_robin, burst_size 8}"    # e.g. {burst_size: 8} for burst
+LOG_PATH=logs/router_burst_log.jsonl
 
 command -v vllm >/dev/null || { echo "vllm not found on PATH (install it separately)"; exit 1; }
 
