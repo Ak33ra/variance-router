@@ -5,3 +5,7 @@ logs/
 !tests/**/*.example.jsonl
 .venv/
 venv/
+
+# generated router configs (written by scripts/)
+smoke_single.yaml
+cluster.yaml
