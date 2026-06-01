@@ -59,7 +59,7 @@ class RouterConfig(BaseModel):
     backends: list[BackendConfig]
     policy: PolicyConfig
     log_path: str = "router_log.jsonl"
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"  # loopback: router is co-located with backends + client
     port: int = 8000
     timeouts: TimeoutConfig = Field(default_factory=TimeoutConfig)
     health_check_on_startup: bool = True

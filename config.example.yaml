@@ -33,7 +33,11 @@ policy:
 # Per-request JSONL log. Each record is joinable to backend logs on request_id.
 log_path: logs/router_log.jsonl
 
-host: 0.0.0.0
+# Router bind address. Loopback by default: the router, the vLLM backends, and
+# the trace client all run on this one machine (which also keeps the client's
+# TTFT measurement free of network latency). Use 0.0.0.0 ONLY if the trace client
+# runs on a different host than the router.
+host: 127.0.0.1
 port: 8000
 
 timeouts:

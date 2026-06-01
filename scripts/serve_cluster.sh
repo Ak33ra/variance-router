@@ -27,6 +27,11 @@ LOG_PATH=logs/router_log.jsonl
 
 command -v vllm >/dev/null || { echo "vllm not found on PATH (install it separately)"; exit 1; }
 
+# Each vLLM instance must own a SEPARATE GPU (no data-parallel, no GPU sharing).
+uniq_gpus=$(printf '%s\n' "${GPUS[@]}" | sort -u | wc -l)
+[ "$uniq_gpus" -eq "${#GPUS[@]}" ] || {
+  echo "GPUS has duplicate ids (${GPUS[*]}); each instance must be on its own GPU"; exit 1; }
+
 # Write the router config. gpu_id is the PHYSICAL CUDA device (GPUS[i]), not the
 # backend index, so per-node logs attribute to the right GPU even if GPUS is
 # remapped (e.g. (2 3)).
