@@ -22,13 +22,13 @@ pip install -r requirements.txt        # router deps (vllm installed separately)
 Pick a small model that fits your GPU (scale up if you have headroom). The model
 id is passed explicitly to the Python tools via `--model` — **no env var is read
 by the code**; it just has to match whatever `GET /v1/models` reports. The
-commands below use `Qwen/Qwen2.5-0.5B-Instruct` as the example id.
+commands below use `Qwen/Qwen3.5-9B` as the example id.
 
 ## 1. Passthrough fidelity (the important one)
 
 **Terminal 1 — one vLLM instance:**
 ```bash
-vllm serve Qwen/Qwen2.5-0.5B-Instruct --port 8001 \
+vllm serve Qwen/Qwen3.5-9B --port 8001 \
   --gpu-memory-utilization 0.85 --max-model-len 2048
 ```
 
@@ -50,7 +50,7 @@ python router.py --config smoke_single.yaml
 python tests/fidelity_check.py \
   --direct http://127.0.0.1:8001 \
   --router http://127.0.0.1:8000 \
-  --model Qwen/Qwen2.5-0.5B-Instruct \
+  --model Qwen/Qwen3.5-9B \
   --make-trace --n 60 --rate 20 --max-tokens 64 \
   --router-log logs/router_log.jsonl
 # add --chat to exercise /v1/chat/completions
@@ -86,9 +86,9 @@ Sharing one GPU confounds throughput, so this only confirms the OpenAI wire
 format + routing across *real* backends, not any TPOT effect:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 vllm serve Qwen/Qwen2.5-0.5B-Instruct --port 8001 \
+CUDA_VISIBLE_DEVICES=0 vllm serve Qwen/Qwen3.5-9B --port 8001 \
   --gpu-memory-utilization 0.45 --max-model-len 1024 &
-CUDA_VISIBLE_DEVICES=0 vllm serve Qwen/Qwen2.5-0.5B-Instruct --port 8002 \
+CUDA_VISIBLE_DEVICES=0 vllm serve Qwen/Qwen3.5-9B --port 8002 \
   --gpu-memory-utilization 0.45 --max-model-len 1024 &
 ```
 Point the router at both backends with `policy: {name: burst, params: {burst_size: 8}}`,

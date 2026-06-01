@@ -38,6 +38,78 @@ trace replay client  ->  THIS ROUTER  ->  vLLM instance 0 (GPU 0, port 8001)
 - The router is the **single routing layer**. No other component makes routing
   decisions.
 
+## Quickstart (running the router)
+
+This gets a cluster serving, the router in front of it, and traffic flowing. For
+the config/policy/logging reference see [USAGE.md](USAGE.md); for validating that
+the router doesn't distort measurements before a real run see [SMOKE.md](SMOKE.md).
+
+### Install
+```bash
+pip install -r requirements.txt   # fastapi, uvicorn, httpx, pydantic, pyyaml
+```
+The router is HTTP-only and does **not** import vllm — install vLLM separately in
+whatever environment serves the backends.
+
+### 1. Serve a cluster (one vLLM instance per GPU)
+```bash
+./scripts/serve_cluster.sh
+```
+Edit the values at the top of the script first — `MODEL`, the `GPUS` array, and
+per-instance memory. It launches one independent `vllm serve` per GPU on ports
+`8001, 8002, …` (each pinned via `CUDA_VISIBLE_DEVICES`, no data-parallel) **and
+writes the matching router config to `cluster.yaml`**, so the backend list always
+agrees with what's actually serving. `Ctrl-C` stops the whole cluster.
+
+For a single instance instead (e.g. local smoke test): `./scripts/serve_vllm.sh`.
+
+### 2. Start the router
+```bash
+./scripts/start_router.sh cluster.yaml
+```
+The router health-checks every backend (failing loudly if any is unreachable),
+then listens on `http://localhost:8000` exposing an OpenAI-compatible API. To
+change the routing policy, edit `POLICY` / `POLICY_PARAMS` in `serve_cluster.sh`
+(re-run it to rewrite `cluster.yaml`) or the `policy:` line in `cluster.yaml`
+directly. Policies: `round_robin`, `jsq`, `burst`, `regime_aware`.
+
+### 3. Send it requests
+The router is a drop-in single-vLLM replacement — point any OpenAI client at
+`http://localhost:8000`. The `model` field must match the served model id.
+
+**curl (streaming):**
+```bash
+curl http://localhost:8000/v1/completions \
+  -H 'content-type: application/json' \
+  -d '{"model":"Qwen/Qwen3.5-9B","prompt":"Hello","max_tokens":64,"stream":true}'
+```
+
+**`vllm bench serve`** — target the router's host/port exactly as you would a
+single vLLM server:
+```bash
+vllm bench serve --host localhost --port 8000 \
+  --model Qwen/Qwen3.5-9B --dataset-name random \
+  --num-prompts 200 --request-rate 50
+```
+(Flag names vary slightly by vLLM version; the point is the `--host/--port` aim at
+the router.) The benchmarking repo's fixed-trace replay client targets the router
+the same way.
+
+**Bundled replay client** (fixed-trace test tool in this repo):
+```bash
+python tests/replay_client.py --make-trace /tmp/trace.jsonl --n 200 --rate 50 \
+  --model Qwen/Qwen3.5-9B
+python tests/replay_client.py --url http://localhost:8000 --trace /tmp/trace.jsonl
+```
+
+### 4. Look at the results
+Every request is logged as one JSONL line at the config's `log_path`
+(`logs/router_log.jsonl` by default). Summarize a run — per-backend load, induced
+per-node CV, latency proxies:
+```bash
+python tests/inspect_log.py logs/router_log.jsonl
+```
+
 ## Core design principles (read before implementing)
 
 ### 1. Two distinct variance knobs — keep them separate

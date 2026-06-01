@@ -5,7 +5,7 @@
 # Edit the values below to change the model or per-instance memory settings.
 set -euo pipefail
 
-MODEL=Qwen/Qwen2.5-0.5B-Instruct
+MODEL=Qwen/Qwen3.5-9B
 GPU_MEM_UTIL=0.45
 MAX_MODEL_LEN=1024
 export CUDA_VISIBLE_DEVICES=0

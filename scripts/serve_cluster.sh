@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-MODEL=Qwen/Qwen2.5-0.5B-Instruct
+MODEL=Qwen/Qwen3.5-9B
 GPUS=(0 1 2 3)        # one vLLM instance per listed GPU id
 BASE_PORT=8001        # instance i serves on BASE_PORT + i
 GPU_MEM_UTIL=0.90     # each instance owns its GPU, so use most of it
@@ -58,6 +58,6 @@ done
 
 echo
 echo "started ${#pids[@]} instances. In another terminal start the router with:"
-echo "  python router.py --config ${CONFIG}"
+echo "  ./scripts/start_router.sh ${CONFIG}"
 echo
 wait

@@ -4,7 +4,7 @@
 # the model, port, or memory settings.
 set -euo pipefail
 
-MODEL=Qwen/Qwen2.5-0.5B-Instruct
+MODEL=Qwen/Qwen3.5-9B
 PORT=8001
 GPU_MEM_UTIL=0.85
 MAX_MODEL_LEN=2048

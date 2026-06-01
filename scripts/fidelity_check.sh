@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-MODEL=Qwen/Qwen2.5-0.5B-Instruct
+MODEL=Qwen/Qwen3.5-9B
 DIRECT_URL=http://127.0.0.1:8001
 ROUTER_URL=http://127.0.0.1:8000
 N=60
