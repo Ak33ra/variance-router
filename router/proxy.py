@@ -56,6 +56,27 @@ _SKIP_RESPONSE_HEADERS = {
 }
 
 
+# --- connection robustness ---------------------------------------------------
+# Keep the router's idle-connection expiry BELOW the backend's keep-alive timeout
+# (uvicorn/vLLM default ~5s) so we drop idle pooled connections before the server
+# reaps them — avoids reusing a socket the backend just closed, the classic
+# source of intermittent 502s after a quiet period in the arrival stream.
+_KEEPALIVE_EXPIRY_S = 2.0
+
+# Connection-level failures that are safe to retry once on a FRESH connection: we
+# either never got a usable connection or the backend closed an idle keepalive
+# socket before processing the request. The retry targets the SAME backend (not
+# re-routing) and only ever fires before any response byte reaches the client, so
+# a generation is never double-delivered to the client.
+_RETRYABLE = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.RemoteProtocolError,  # "Server disconnected without sending a response"
+)
+_MAX_ATTEMPTS = 2  # one initial attempt + one retry
+
+
 def _stamp() -> dict[str, float]:
     return {"monotonic": time.monotonic(), "wall": time.time()}
 
@@ -148,6 +169,7 @@ async def _handle(app: FastAPI, request: Request, path: str):
         "completion_time": None,
         "status_code": None,
         "router_overhead_ms": None,
+        "retries": 0,
         "error": None,
     }
 
@@ -157,17 +179,32 @@ async def _handle(app: FastAPI, request: Request, path: str):
 
 
 async def _handle_stream(client, url, raw, headers, backend, logger, record, pre_overhead_ms):
-    # Open the upstream stream first so we can mirror its status/headers.
-    cm = client.stream("POST", url, content=raw, headers=headers)
-    try:
-        resp = await cm.__aenter__()
-    except Exception as e:  # noqa: BLE001
+    # Open the upstream stream first so we can mirror its status/headers. Retry
+    # once on a fresh connection if opening fails before any response byte — this
+    # is still pre-response to the client, so it can't double-deliver tokens.
+    cm = resp = None
+    last_err: Exception | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        cm = client.stream("POST", url, content=raw, headers=headers)
+        try:
+            resp = await cm.__aenter__()
+            break
+        except _RETRYABLE as e:
+            last_err, cm = e, None
+            if attempt + 1 < _MAX_ATTEMPTS:
+                record["retries"] += 1
+                continue
+            break
+        except Exception as e:  # noqa: BLE001 - non-retryable transport/other error
+            last_err, cm = e, None
+            break
+    if resp is None:
         backend.release()
-        record["error"] = f"{type(e).__name__}: {e}"
+        record["error"] = f"{type(last_err).__name__}: {last_err}"
         record["completion_time"] = _stamp()
         record["router_overhead_ms"] = pre_overhead_ms
         logger.log(record)
-        return JSONResponse({"error": {"message": f"upstream connect failed: {e}"}}, status_code=502)
+        return JSONResponse({"error": {"message": f"upstream connect failed: {last_err}"}}, status_code=502)
 
     record["status_code"] = resp.status_code
     status_code = resp.status_code
@@ -211,15 +248,30 @@ async def _handle_stream(client, url, raw, headers, backend, logger, record, pre
 
 
 async def _handle_unary(client, url, raw, headers, backend, logger, record, pre_overhead_ms):
-    try:
-        resp = await client.post(url, content=raw, headers=headers)
-    except Exception as e:  # noqa: BLE001
+    # Retry once on a fresh connection if the request fails before a response
+    # (e.g. backend closed an idle keepalive socket on reuse).
+    resp = None
+    last_err: Exception | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            resp = await client.post(url, content=raw, headers=headers)
+            break
+        except _RETRYABLE as e:
+            last_err = e
+            if attempt + 1 < _MAX_ATTEMPTS:
+                record["retries"] += 1
+                continue
+            break
+        except Exception as e:  # noqa: BLE001 - non-retryable transport/other error
+            last_err = e
+            break
+    if resp is None:
         backend.release()
-        record["error"] = f"{type(e).__name__}: {e}"
+        record["error"] = f"{type(last_err).__name__}: {last_err}"
         record["completion_time"] = _stamp()
         record["router_overhead_ms"] = pre_overhead_ms
         logger.log(record)
-        return JSONResponse({"error": {"message": f"upstream request failed: {e}"}}, status_code=502)
+        return JSONResponse({"error": {"message": f"upstream request failed: {last_err}"}}, status_code=502)
 
     backend.release()
     # Non-streaming: the whole response arrives at once, so first token ~= completion.
@@ -254,7 +306,12 @@ def create_app(config: RouterConfig) -> FastAPI:
         t = config.timeouts
         timeout = httpx.Timeout(connect=t.connect_s, read=t.read_s, write=t.write_s, pool=t.pool_s)
         # No connection cap: the router must not throttle the trace it replays.
-        limits = httpx.Limits(max_connections=None, max_keepalive_connections=None)
+        # keepalive_expiry < backend keep-alive timeout (see _KEEPALIVE_EXPIRY_S).
+        limits = httpx.Limits(
+            max_connections=None,
+            max_keepalive_connections=None,
+            keepalive_expiry=_KEEPALIVE_EXPIRY_S,
+        )
         client = httpx.AsyncClient(timeout=timeout, limits=limits)
         pool = BackendPool(config.backends)
         if config.health_check_on_startup:

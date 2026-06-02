@@ -50,8 +50,17 @@ One JSONL record per request at `log_path`. Fields include `request_id`
 (propagated to the backend via `X-Request-Id` for end-to-end joins),
 `routed_backend` + `gpu_id`, monotonic+wall `arrival_time` / `dispatch_time` /
 `first_token_time` / `completion_time`, `in_flight_at_dispatch`, `prompt_tokens`
-/ `output_tokens` (when the backend reports usage), the `policy` in effect, and
-`router_overhead_ms`.
+/ `output_tokens` (when the backend reports usage), the `policy` in effect,
+`router_overhead_ms`, `retries` (connection retries before success — see below),
+and `error` (null on success).
+
+The router keeps its idle-connection expiry below the backend's keep-alive
+timeout and retries once on a fresh connection if a dispatch fails before any
+response byte (a backend closing an idle keepalive socket on reuse). Such a
+retry is same-backend (never re-routed) and pre-response, so it can't
+double-deliver tokens. A record with `retries > 0` and `error: null` means the
+retry recovered a transient connection failure; a `502` with a populated `error`
+means it failed even after the retry (e.g. a backend that is down or saturated).
 
 **Per-node arrival CV** is computed offline by the benchmarking repo from these
 records: group by `routed_backend`, take the per-node sequence of
