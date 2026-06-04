@@ -11,6 +11,39 @@ pip install -r requirements.txt
 Dependency-light by design: FastAPI + uvicorn + httpx + pydantic + PyYAML. No
 `vllm`, no `torch`.
 
+## Reproducible workflow (three scripts)
+
+The simplest end-to-end run, one command per step. Steps 1 and 2 each stay in the
+foreground (`Ctrl-C` stops them), so use three terminals.
+
+```bash
+# 1. Start the cluster: one vLLM instance per GPU, and write cluster.yaml.
+#    Edit MODEL / GPUS / memory at the top of the script first.
+./scripts/serve_cluster.sh
+
+# 2. Start the router in front of that cluster (health-checks backends first,
+#    then serves an OpenAI-compatible API on http://localhost:8000).
+./scripts/start_router.sh cluster.yaml
+
+# 3. Send requests through the router with `vllm bench serve`.
+#    seeded_replication.sh is a ready-to-run example (fixed seed, 1000 prompts).
+./seeded_replication.sh
+```
+
+`serve_cluster.sh` writes `cluster.yaml` so the router's backend list always
+agrees with what is actually serving — step 2 just consumes it. To compare
+policies, edit `POLICY` / `POLICY_PARAMS` in `serve_cluster.sh` (re-run to rewrite
+`cluster.yaml`) or the `policy:` line in `cluster.yaml`, then re-run steps 2–3.
+
+Step 3 targets the router exactly as it would a single vLLM server (`--port 8000`,
+`--model` matching the served id). `seeded_replication.sh` pins `--seed 0` so the
+same trace replays across policies — change only the policy between runs.
+Substitute your own `vllm bench serve` invocation or the bundled
+`tests/replay_client.py` (see below) for a custom trace.
+
+No GPUs? Run the [local validation](#local-validation-no-gpu) path instead — it
+exercises the same router code against mock backends.
+
 ## Run the router
 
 ```bash
