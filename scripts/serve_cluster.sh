@@ -14,7 +14,7 @@ MODEL=Qwen/Qwen3.5-9B
 GPUS=(0 1)        # one vLLM instance per listed GPU id
 BASE_PORT=8001        # instance i serves on BASE_PORT + i
 GPU_MEM_UTIL=0.90     # each instance owns its GPU, so use most of it
-MAX_MODEL_LEN=2048
+MAX_MODEL_LEN=4096
 
 # --- router config written for this cluster ---
 CONFIG=cluster.yaml
@@ -24,7 +24,7 @@ ROUTER_PORT=8000
 POLICY=burst_wrap            # baseline; set to burst / regime_aware for the interventions
 POLICY_PARAMS="{base: jsq, burst_size 8}"    # e.g. {burst_size: 8} for burst
 #POLICY_PARAMS="{}"
-LOG_PATH=logs/router_burstjsq_log.jsonl
+LOG_PATH=logs/sharegpt_router_burstjsq_log.jsonl
 
 command -v vllm >/dev/null || { echo "vllm not found on PATH (install it separately)"; exit 1; }
 
