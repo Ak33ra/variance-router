@@ -22,8 +22,9 @@ BACKEND_HOST=127.0.0.1
 ROUTER_HOST=127.0.0.1
 ROUTER_PORT=8000
 POLICY=burst_wrap            # baseline; set to burst / regime_aware for the interventions
-POLICY_PARAMS="{base: round_robin, burst_size 8}"    # e.g. {burst_size: 8} for burst
-LOG_PATH=logs/router_burst_log.jsonl
+POLICY_PARAMS="{base: jsq, burst_size 8}"    # e.g. {burst_size: 8} for burst
+#POLICY_PARAMS="{}"
+LOG_PATH=logs/router_burstjsq_log.jsonl
 
 command -v vllm >/dev/null || { echo "vllm not found on PATH (install it separately)"; exit 1; }
 

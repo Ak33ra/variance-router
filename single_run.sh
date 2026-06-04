@@ -11,7 +11,7 @@ output_len=128
 result_root="."
 burstiness=0.5
 
-for seed in 0 1 2 3 4 5; do
+for seed in 0; do
 
   out_dir="${result_root}"
   mkdir -p "$out_dir"
@@ -28,12 +28,7 @@ for seed in 0 1 2 3 4 5; do
     --request-rate $request_rate \
     --burstiness $burstiness \
     --seed ${seed} \
-    --save-result \
-    --save-detailed \
     --metric-percentiles "50,90,95,99" \
     --percentile-metrics "ttft,tpot,itl,e2el" \
-    --result-dir "$out_dir" \
-    --result-filename "burstjsq-seed${seed}.json" \
     --port 8000
-    #--plot-timeline \
 done
